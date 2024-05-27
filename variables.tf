@@ -41,6 +41,10 @@ variable "license_filename" {
   description = "The name of the file that contains the TFE FDO License"
 }
 
+variable "license_value" {
+  description = "The value of the TFE FDO License"
+}
+
 variable "key_pair" {
   description = "The name of the AWS Key Pair for my EC2 instance"
 }

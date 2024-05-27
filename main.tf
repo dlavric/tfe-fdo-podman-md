@@ -253,7 +253,8 @@ resource "aws_instance" "instance" {
     password         = var.password,
     certs_bucket     = var.certs_bucket,
     license_bucket   = var.license_bucket,
-    license_filename = var.license_filename
+    license_filename = var.license_filename,
+    license_value    = var.license_value
   })
 
   network_interface {
