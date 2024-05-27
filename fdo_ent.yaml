@@ -1,0 +1,289 @@
+#cloud-config
+write_files:
+  - content: |
+      apiVersion: "v1"
+      kind: "Pod"
+      metadata:
+  labels:
+    app: "terraform-enterprise"
+  name: "terraform-enterprise"
+spec:
+  restartPolicy: "Never"
+  containers:
+  - env:
+    - name: "TFE_OPERATIONAL_MODE"
+      value: "disk"
+    - name: "TFE_LICENSE"
+      value: "<HashiCorp license>"
+    - name: "TFE_HOSTNAME"
+      value: "<Hostname>"
+    - name: "TFE_HTTP_PORT"
+      value: "8080"
+    - name: "TFE_HTTPS_PORT"
+      value: "8443"
+    - name: "TFE_TLS_CERT_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/cert.pem"
+    - name: "TFE_TLS_KEY_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/key.pem"
+    - name: "TFE_TLS_CA_BUNDLE_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/bundle.pem"
+    - name: "TFE_DISK_CACHE_VOLUME_NAME"
+      value: "terraform-enterprise_terraform-enterprise-cache"
+    - name: "TFE_LICENSE_REPORTING_OPT_OUT"
+      value: "true"
+    - name: "TFE_ENCRYPTION_PASSWORD"
+      value: "<Encryption password>"
+    image: "images.releases.hashicorp.com/hashicorp/terraform-enterprise:<vYYYYMM-#>"
+    name: "terraform-enterprise"
+    ports:
+    - containerPort: 8080
+      hostPort: 80
+    - containerPort: 8443
+      hostPort: 443
+    - containerPort: 9090
+      hostPort: 9090
+    securityContext:
+      capabilities:
+        add:
+        - "CAP_IPC_LOCK"
+      readOnlyRootFilesystem: true
+      seLinuxOptions:
+        type: "spc_t"
+    volumeMounts:
+    - mountPath: "/etc/ssl/private/terraform-enterprise"
+      name: "certs"
+    - mountPath: "/var/log/terraform-enterprise"
+      name: "log"
+    - mountPath: "/run"
+      name: "run"
+    - mountPath: "/tmp"
+      name: "tmp"
+    - mountPath: "/var/lib/terraform-enterprise"
+      name: "data"
+    - mountPath: "/run/docker.sock"
+      name: "docker-sock"
+    - mountPath: "/var/cache/tfe-task-worker/terraform"
+      name: "terraform-enterprise_terraform-enterprise-cache-pvc"
+  volumes:
+  - hostPath:
+      path: "<path_to_certs_on_host>"
+      type: "Directory"
+    name: "certs"
+  - emptyDir:
+      medium: "Memory"
+    name: "log"
+  - emptyDir:
+      medium: "Memory"
+    name: "run"
+  - emptyDir:
+      medium: "Memory"
+    name: "tmp"
+  - hostPath:
+      path: "<mounted_disk_path_on_host>"
+      type: "Directory"
+    name: "data"
+  - hostPath:
+      path: "/var/run/docker.sock"
+      type: "File"
+    name: "docker-sock"
+  - name: "terraform-enterprise_terraform-enterprise-cache-pvc"
+    persistentVolumeClaim:
+      claimName: "terraform-enterprise_terraform-enterprise-cache"
+
+    permissions: '0640'
+    path: /var/tmp/compose.yaml
+  - content: |
+       until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting to install Docker" ; sleep 3 ; done 
+
+       #uninstall any older docker versions
+       sudo apt-get remove -y docker.io docker-doc docker-compose podman-docker containerd runc
+
+       #update the apt package
+       sudo apt-get update
+       sudo apt-get install ca-certificates curl gnupg
+
+       #add docker official GPG key
+       sudo install -m 0755 -d /etc/apt/keyrings
+       curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+       sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+       #setup the repository
+       echo \
+       "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+       "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
+       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+       #update the apt package index
+       sudo apt-get update
+
+       #install Docker Engine, containerd, and Docker Compose latest version
+       sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    permissions: '0750'
+    path: /var/tmp/install-docker.sh
+  - content: |
+       until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting to copy certs" ; sleep 3 ; done 
+
+       #create a new directory dedicated to tfe and to add the certs
+       mkdir -p /opt/tfe-fdo/certs
+
+       #install awscli to get the certs from S3 bucket
+       sudo apt-get -y install awscli
+
+       #copy the certs from S3 locally, to my tfe-fdo/certs folder
+       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/cert.pem
+       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/bundle.pem
+       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/private_key_pem /opt/tfe-fdo/certs/key.pem
+
+       #copy the TFE FDO license to the tfe-fdo/ folder
+       sudo aws s3 cp s3://${license_bucket}/${license_filename} /opt/tfe-fdo/${license_filename}
+
+       #login to the Terraform Enterprise container image registry
+       cat /opt/tfe-fdo/${license_filename} | sudo docker login --username terraform images.releases.hashicorp.com --password-stdin
+
+       #pull the TFE image from the registry
+       docker pull images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_version}
+
+       #copy compose file
+       cp /var/tmp/compose.yaml /opt/tfe-fdo
+ 
+       #spin up TFE
+       pushd /opt/tfe-fdo
+       #mkdir -p /root/tfe-fdo
+       docker compose up --detach
+    permissions: '0750'
+    path: /var/tmp/install-tfe.sh
+  - content: |
+      {
+        "username": "${username}",
+        "email": "${email}",
+        "password": "${password}"
+      }
+    permissions: '0750'
+    path: /opt/tfe-fdo/payload-iact.json
+  - content: |
+      #!/bin/bash
+      #We have to wait for TFE be fully functioning before we can continue
+      while true; do
+          if curl -kI "https://${tfe_hostname}/admin" 2>&1 | grep -w "200\|301" ;
+          then
+              echo "TFE is up and running"
+              echo "Will continue in 1 minutes with the final steps"
+              sleep 60
+              break
+          else
+              echo "TFE is not available yet. Please wait..."
+              sleep 60
+          fi
+      done
+
+      #go to the tfe folder
+      pushd /opt/tfe-fdo
+
+      #get iact token
+      IACT_TOKEN=`docker compose exec tfe retrieve-iact | tee /opt/tfe-fdo/iact-token.txt`
+
+      #create the first admin user
+      curl -k \
+          --header "Content-Type: application/json" \
+          --request POST \
+          --data @/opt/tfe-fdo/payload-iact.json \
+          https://${tfe_hostname}/admin/initial-admin-user?token=$IACT_TOKEN | tee /opt/tfe-fdo/initial-admin-user.json
+    permissions: '0750'
+    path: /var/tmp/create-admin-user.sh   
+runcmd:
+  - until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting for final steps" ; sleep 3 ; done 
+  - sudo bash /var/tmp/install-docker.sh
+  - sudo bash /var/tmp/install-tfe.sh
+  - sudo bash /var/tmp/create-admin-user.sh
+packages_update: true
+packages:
+  - unzip
+
+apiVersion: "v1"
+kind: "Pod"
+metadata:
+  labels:
+    app: "terraform-enterprise"
+  name: "terraform-enterprise"
+spec:
+  restartPolicy: "Never"
+  containers:
+  - env:
+    - name: "TFE_OPERATIONAL_MODE"
+      value: "disk"
+    - name: "TFE_LICENSE"
+      value: "<HashiCorp license>"
+    - name: "TFE_HOSTNAME"
+      value: "<Hostname>"
+    - name: "TFE_HTTP_PORT"
+      value: "8080"
+    - name: "TFE_HTTPS_PORT"
+      value: "8443"
+    - name: "TFE_TLS_CERT_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/cert.pem"
+    - name: "TFE_TLS_KEY_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/key.pem"
+    - name: "TFE_TLS_CA_BUNDLE_FILE"
+      value: "/etc/ssl/private/terraform-enterprise/bundle.pem"
+    - name: "TFE_DISK_CACHE_VOLUME_NAME"
+      value: "terraform-enterprise_terraform-enterprise-cache"
+    - name: "TFE_LICENSE_REPORTING_OPT_OUT"
+      value: "true"
+    - name: "TFE_ENCRYPTION_PASSWORD"
+      value: "<Encryption password>"
+    image: "images.releases.hashicorp.com/hashicorp/terraform-enterprise:<vYYYYMM-#>"
+    name: "terraform-enterprise"
+    ports:
+    - containerPort: 8080
+      hostPort: 80
+    - containerPort: 8443
+      hostPort: 443
+    - containerPort: 9090
+      hostPort: 9090
+    securityContext:
+      capabilities:
+        add:
+        - "CAP_IPC_LOCK"
+      readOnlyRootFilesystem: true
+      seLinuxOptions:
+        type: "spc_t"
+    volumeMounts:
+    - mountPath: "/etc/ssl/private/terraform-enterprise"
+      name: "certs"
+    - mountPath: "/var/log/terraform-enterprise"
+      name: "log"
+    - mountPath: "/run"
+      name: "run"
+    - mountPath: "/tmp"
+      name: "tmp"
+    - mountPath: "/var/lib/terraform-enterprise"
+      name: "data"
+    - mountPath: "/run/docker.sock"
+      name: "docker-sock"
+    - mountPath: "/var/cache/tfe-task-worker/terraform"
+      name: "terraform-enterprise_terraform-enterprise-cache-pvc"
+  volumes:
+  - hostPath:
+      path: "<path_to_certs_on_host>"
+      type: "Directory"
+    name: "certs"
+  - emptyDir:
+      medium: "Memory"
+    name: "log"
+  - emptyDir:
+      medium: "Memory"
+    name: "run"
+  - emptyDir:
+      medium: "Memory"
+    name: "tmp"
+  - hostPath:
+      path: "<mounted_disk_path_on_host>"
+      type: "Directory"
+    name: "data"
+  - hostPath:
+      path: "/var/run/docker.sock"
+      type: "File"
+    name: "docker-sock"
+  - name: "terraform-enterprise_terraform-enterprise-cache-pvc"
+    persistentVolumeClaim:
+      claimName: "terraform-enterprise_terraform-enterprise-cache"
