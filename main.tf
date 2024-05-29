@@ -229,7 +229,7 @@ resource "aws_iam_role_policy" "daniela-policy" {
 
 # Create EC2 instance
 resource "aws_instance" "instance" {
-  ami                  = "ami-0506d5615a7495cc1" # eu-west-3 redhat machine
+  ami                  = "ami-0bd23a7080ec75f4d" # eu-west-3 redhat machine
   instance_type        = "t2.xlarge"
   iam_instance_profile = aws_iam_instance_profile.daniela-profile.name
 
