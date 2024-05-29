@@ -6,7 +6,7 @@ write_files:
       metadata:
         labels:
           app: "terraform-enterprise"
-          name: "terraform-enterprise"
+        name: "terraform-enterprise"
       spec:
           restartPolicy: "Never"
           containers:
@@ -112,24 +112,27 @@ write_files:
        #create a new directory dedicated to tfe and to add the certs
        mkdir -p /opt/tfe-fdo/certs
 
+       #create a directory to store the data
+       mkdir -p /opt/tfe-fdo/data
+
        #install awscli to get the certs from S3 bucket
        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
        unzip awscliv2.zip
-       sudo ./aws/install
+       sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
 
        #copy the certs from S3 locally, to my tfe-fdo/certs folder
-       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/cert.pem
-       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/bundle.pem
-       sudo aws s3 cp s3://${certs_bucket}/ssl-certs/private_key_pem /opt/tfe-fdo/certs/key.pem
+       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/cert.pem
+       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/bundle.pem
+       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/private_key_pem /opt/tfe-fdo/certs/key.pem
 
        #copy the TFE FDO license to the tfe-fdo/ folder
-       sudo aws s3 cp s3://${license_bucket}/${license_filename} /opt/tfe-fdo/${license_filename}
+       /usr/local/bin/aws s3 cp s3://${license_bucket}/${license_filename} /opt/tfe-fdo/${license_filename}
 
        #login to the Terraform Enterprise container image registry
        cat /opt/tfe-fdo/${license_filename} |  podman login --username terraform images.releases.hashicorp.com --password-stdin
 
        #pull the TFE image from the registry
-       # podman pull images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_version}
+       podman pull images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_version}
 
        #copy compose file
        cp /var/tmp/compose.yaml /opt/tfe-fdo
@@ -170,7 +173,9 @@ write_files:
       pushd /opt/tfe-fdo
 
       #get iact token
-      IACT_TOKEN=`podman exec -it terraform-enterprise-terraform-enterprise tfectl admin token | tee /opt/tfe-fdo/iact-token.txt`
+      IACT_TOKEN_TEMP=`podman exec -it terraform-enterprise-terraform-enterprise tfectl admin token | tee /opt/tfe-fdo/iact-token.txt`
+
+      IACT_TOKEN=`echo $IACT_TOKEN_TEMP | sed 's/[^A-Za-z0-9]//g' |  sed 's/^1m//;s/0m$//'`  
 
       #create the first admin user
       curl -k \
