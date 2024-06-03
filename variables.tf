@@ -29,16 +29,8 @@ variable "password" {
   description = "The TFE password for my Initial ADMIN user of my installation"
 }
 
-variable "certs_bucket" {
-  description = "The name of the S3 Bucket to save the certs to"
-}
-
-variable "license_bucket" {
-  description = "The name of the S3 Bucket to save the license to"
-}
-
-variable "license_filename" {
-  description = "The name of the file that contains the TFE FDO License"
+variable "bucket" {
+  description = "The name of the S3 Bucket to save assetts to"
 }
 
 variable "license_value" {
@@ -53,3 +45,6 @@ variable "enc_password" {
   description = "The encryption password for my TFE installation"
 }
 
+variable "prefix" {
+  description = "Prefix for tags"
+}

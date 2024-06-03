@@ -7,5 +7,5 @@ output "url" {
 }
 
 output "ssh_connect" {
-    value = "ssh -i ${var.key_pair}.pem ec2-user@${aws_instance.instance.public_ip}"
+  value = "ssh ec2-user@${aws_instance.instance.public_ip}"
 }
