@@ -29,16 +29,14 @@ cd tfe-fdo-podman-md
 - Create a file `variables.auto.tfvars` with the following content
 ```hcl
 aws_region       = "eu-west-3"
-tfe_version      = "v202404-2"
+tfe_version      = "v202405-1"
 tfe_hostname     = "podman1.daniela.sbx.hashidemos.io"
 tfe_subdomain    = "podman1"
 tfe_domain       = "daniela.sbx.hashidemos.io"
 email            = "yourname@email.com"
 username         = "dlavric"
 password         = "DanielaLavric"
-certs_bucket     = "daniela-podman-certs1"
-license_bucket   = "daniela-podman-license1"
-license_filename = "fdo-license.txt"
+bucket           = "daniela-podman-bucket1"
 key_pair         = "daniela-podman-key"
 enc_password     = "encpassword"
 license_value    = "AB..."

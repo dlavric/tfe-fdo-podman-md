@@ -21,8 +21,7 @@ resource "tls_private_key" "private_key" {
 
 resource "acme_registration" "reg" {
   account_key_pem = tls_private_key.private_key.private_key_pem
-  #email_address   = "dededanutza@gmail.com"
-  email_address = var.email
+  email_address   = var.email
 }
 
 resource "acme_certificate" "certificate" {
@@ -36,17 +35,18 @@ resource "acme_certificate" "certificate" {
   dns_challenge {
     provider = "route53"
     config = {
-      AWS_HOSTED_ZONE_ID = data.aws_route53_zone.zone.zone_id
+      AWS_HOSTED_ZONE_ID = data.aws_route53_zone.zone.zone_id,
+      AWS_REGION         = var.aws_region
     }
   }
 }
 
 # Add my certificates to a S3 Bucket
 resource "aws_s3_bucket" "s3bucket" {
-  bucket = var.certs_bucket
+  bucket = var.bucket
 
   tags = {
-    Name        = "Daniela FDO Bucket"
+    Name        = "${var.prefix} FDO Bucket"
     Environment = "Dev"
   }
 }
@@ -64,29 +64,13 @@ resource "aws_s3_object" "object_full_chain" {
   content = "${acme_certificate.certificate.certificate_pem}${acme_certificate.certificate.issuer_pem}"
 }
 
-# Add my TFE FDO license to a S3 Bucket
-resource "aws_s3_bucket" "s3bucket_license" {
-  bucket = var.license_bucket
-
-  tags = {
-    Name        = "Daniela FDO License"
-    Environment = "Dev"
-  }
-}
-
-resource "aws_s3_object" "object_license" {
-  bucket = aws_s3_bucket.s3bucket_license.bucket
-  key    = var.license_filename
-  source = var.license_filename
-}
-
 # Create network
 resource "aws_vpc" "vpc" {
   cidr_block       = "10.0.0.0/16"
   instance_tenancy = "default"
 
   tags = {
-    Name = "daniela-vpc"
+    Name = "${var.prefix}-vpc"
   }
 }
 
@@ -95,7 +79,7 @@ resource "aws_subnet" "publicsub" {
   cidr_block = "10.0.1.0/24"
 
   tags = {
-    Name = "daniela-public-subnet"
+    Name = "${var.prefix}-public-subnet"
   }
 }
 
@@ -104,7 +88,7 @@ resource "aws_internet_gateway" "internetgw" {
   vpc_id = aws_vpc.vpc.id
 
   tags = {
-    Name = "daniela-internet-gateway"
+    Name = "${var.prefix}-internet-gateway"
   }
 }
 
@@ -117,7 +101,7 @@ resource "aws_route_table" "route" {
   }
 
   tags = {
-    Name = "daniela-route"
+    Name = "${var.prefix}-route"
   }
 }
 
@@ -155,7 +139,7 @@ resource "aws_security_group" "securitygp" {
   }
 
   tags = {
-    type = "daniela-security-group"
+    type = "${var.prefix}-security-group"
   }
 }
 
@@ -165,19 +149,14 @@ resource "aws_network_interface" "nic" {
   security_groups = [aws_security_group.securitygp.id]
 }
 
-# resource "aws_network_interface_sg_attachment" "sg_attachment" {
-#   security_group_id    = aws_security_group.securitygp.id
-#   network_interface_id = aws_instance.instance.primary_network_interface_id
-# }
-
 resource "aws_eip" "eip" {
   instance = aws_instance.instance.id
   domain   = "vpc"
 }
 
 # Create roles and policies to attach to the instance
-resource "aws_iam_role" "daniela-role" {
-  name = "daniela-role-docker"
+resource "aws_iam_role" "role" {
+  name = "${var.prefix}-role-docker"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -193,14 +172,14 @@ resource "aws_iam_role" "daniela-role" {
   })
 }
 
-resource "aws_iam_instance_profile" "daniela-profile" {
-  name = "daniela-profile-docker"
-  role = aws_iam_role.daniela-role.name
+resource "aws_iam_instance_profile" "profile" {
+  name = "${var.prefix}-profile-docker"
+  role = aws_iam_role.role.name
 }
 
-resource "aws_iam_role_policy" "daniela-policy" {
-  name = "daniela-policy-docker"
-  role = aws_iam_role.daniela-role.id
+resource "aws_iam_role_policy" "policy" {
+  name = "${var.prefix}-policy-docker"
+  role = aws_iam_role.role.id
 
   # Terraform's "jsonencode" function converts a
   # Terraform expression result to valid JSON syntax.
@@ -227,34 +206,39 @@ resource "aws_iam_role_policy" "daniela-policy" {
   })
 }
 
+resource "aws_key_pair" "key-pair" {
+  key_name   = var.key_pair
+  public_key = file("~/.ssh/id_rsa.pub")
+}
+
 # Create EC2 instance
 resource "aws_instance" "instance" {
+  # to prevent VM created before certs are created
+  depends_on = [aws_s3_object.object, aws_s3_object.object_full_chain]
+
   ami                  = "ami-0bd23a7080ec75f4d" # eu-west-3 redhat machine
-  instance_type        = "t2.xlarge"
-  iam_instance_profile = aws_iam_instance_profile.daniela-profile.name
+  instance_type        = "m5.xlarge"
+  iam_instance_profile = aws_iam_instance_profile.profile.name
 
   credit_specification {
     cpu_credits = "unlimited"
   }
 
-  key_name = var.key_pair
+  key_name = aws_key_pair.key-pair.key_name
 
   root_block_device {
     volume_size = 50
   }
 
   user_data = templatefile("fdo_ent.yaml", {
-    license          = var.license_filename,
-    tfe_version      = var.tfe_version,
-    tfe_hostname     = var.tfe_hostname,
-    enc_password     = var.enc_password,
-    email            = var.email,
-    username         = var.username,
-    password         = var.password,
-    certs_bucket     = var.certs_bucket,
-    license_bucket   = var.license_bucket,
-    license_filename = var.license_filename,
-    license_value    = var.license_value
+    tfe_version   = var.tfe_version,
+    tfe_hostname  = var.tfe_hostname,
+    enc_password  = var.enc_password,
+    email         = var.email,
+    username      = var.username,
+    password      = var.password,
+    bucket        = var.bucket,
+    license_value = var.license_value
   })
 
   network_interface {
@@ -263,7 +247,7 @@ resource "aws_instance" "instance" {
   }
 
   tags = {
-    Name = "daniela-tfe-fdodocker"
+    Name = "${var.prefix}-tfe-fdodocker"
   }
 
 }

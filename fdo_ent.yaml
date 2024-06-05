@@ -101,13 +101,17 @@ write_files:
        #enable Podman socket
        systemctl enable --now podman.socket
 
-       #update the yum package
-       sudo yum update
-       sudo yum install ca-certificates curl gnupg
+       #install packages
+       dnf install -y install ca-certificates curl gnupg
+
+       # enable epel
+       subscription-manager repos --enable codeready-builder-for-rhel-9-$(arch)-rpms
+       dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+       dnf install -y htop # for monitoring
     permissions: '0750'
     path: /var/tmp/install-podman.sh
   - content: |
-       until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting to copy certs" ; sleep 3 ; done 
+       until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting for internet.." ; sleep 3 ; done 
 
        #create a new directory dedicated to tfe and to add the certs
        mkdir -p /opt/tfe-fdo/certs
@@ -116,20 +120,18 @@ write_files:
        mkdir -p /opt/tfe-fdo/data
 
        #install awscli to get the certs from S3 bucket
+       cd /var/tmp/
        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
        unzip awscliv2.zip
-       sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+       ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
 
        #copy the certs from S3 locally, to my tfe-fdo/certs folder
-       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/cert.pem
-       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/bundle.pem
-       /usr/local/bin/aws s3 cp s3://${certs_bucket}/ssl-certs/private_key_pem /opt/tfe-fdo/certs/key.pem
-
-       #copy the TFE FDO license to the tfe-fdo/ folder
-       /usr/local/bin/aws s3 cp s3://${license_bucket}/${license_filename} /opt/tfe-fdo/${license_filename}
+       /usr/local/bin/aws s3 cp s3://${bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/cert.pem
+       /usr/local/bin/aws s3 cp s3://${bucket}/ssl-certs/full_chain /opt/tfe-fdo/certs/bundle.pem
+       /usr/local/bin/aws s3 cp s3://${bucket}/ssl-certs/private_key_pem /opt/tfe-fdo/certs/key.pem
 
        #login to the Terraform Enterprise container image registry
-       cat /opt/tfe-fdo/${license_filename} |  podman login --username terraform images.releases.hashicorp.com --password-stdin
+       echo ${license_value} |  podman login --username terraform images.releases.hashicorp.com --password-stdin
 
        #pull the TFE image from the registry
        podman pull images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_version}
@@ -141,7 +143,9 @@ write_files:
        pushd /opt/tfe-fdo
 
        #create a Terraform Enterprise pod
-       podman play kube /opt/tfe-fdo/compose.yaml
+       escaped=$(systemd-escape -p /opt/tfe-fdo/compose.yaml)
+       systemctl start podman-kube@$escaped.service
+
 
     permissions: '0750'
     path: /var/tmp/install-tfe.sh
@@ -186,7 +190,6 @@ write_files:
     permissions: '0750'
     path: /var/tmp/create-admin-user.sh   
 runcmd:
-  - until ping -c1 archive.ubuntu.com &>/dev/null; do echo "waiting for final steps" ; sleep 3 ; done 
   - sudo bash /var/tmp/install-podman.sh
   - sudo bash /var/tmp/install-tfe.sh
   - sudo bash /var/tmp/create-admin-user.sh
